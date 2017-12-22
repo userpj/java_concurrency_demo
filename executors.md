@@ -260,3 +260,175 @@ public class Main {
 }
 ```
 
+## Separating the launching of tasks and the processing of their results in an executor
+
+Normally, when you execute concurrent tasks using an executor, you will send Runnable
+or Callable tasks to the executor and get Future objects to control the method. You can find situations, where you need to send the tasks to the executor in one object and process
+the results in another one. For such situations, the Java Concurrency API provides the
+CompletionService class.
+
+
+This CompletionService class has a method to send the tasks to an executor and a
+method to get the Future object for the next task that has  nished its execution. Internally,
+it uses an Executor object to execute the tasks. This behavior has the advantage to share a CompletionService object, and sends tasks to the executor so the others can process the results. The limitation is that the second object can only get the Future objects for those tasks that have  nished its execution, so these Future objects can only be used to get the
+
+results of the tasks.
+
+
+​			
+​		
+​	
+​		
+​	
+
+### ReportGenerator
+
+```java
+import java.util.concurrent.Callable;
+import java.util.concurrent.TimeUnit;
+
+public class ReportGenerator implements Callable<String> {
+    private String sender;
+    private String title;
+
+    // implement the constructor of the class the initializes the two attributes
+    public ReportGenerator(String sender, String title) {
+        this.sender = sender;
+        this.title = title;
+    }
+
+    @Override
+    public String call() throws  Exception {
+        try {
+            Long duration = (long)(Math.random()*10);
+            System.out.printf("%s_%s: ReportGenerator: Generating a report during %d seconds \n", this.sender, this.title, duration);
+            TimeUnit.SECONDS.sleep(duration);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        // generate the report as a string with the sender and title attributes and return the string
+        String ret = sender + ": " + title;
+        return ret;
+    }
+}
+```
+
+### ReportRequest
+
+```java
+import java.util.concurrent.CompletionService;
+
+
+// create a class named ReportRequest and specify that it implements the Runnable interface. This class will simulate some report request.
+public class ReportRequest implements Runnable {
+    private String name;
+    private CompletionService<String> service;
+
+    public ReportRequest(String name, CompletionService<String> service) {
+        this.name = name;
+        this.service = service;
+    }
+
+    //Implement the run() method. Create three ReportGenerator objects and send them to the CompletionService object using the submit() method.
+    @Override
+    public void run() {
+        ReportGenerator reportGenerator = new ReportGenerator(name, "Report");
+        service.submit(reportGenerator);
+    }
+}
+```
+
+### ReportProcessor
+
+```java
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+
+// this class will get the results of the ReportGenerator tasks
+public class ReportProcessor implements Runnable {
+    private CompletionService<String> service;
+    private boolean end;
+
+    public ReportProcessor(CompletionService<String> service) {
+        this.service = service;
+        end = false;
+    }
+
+    @Override
+    public void run() {
+        while(!end) {
+            try {
+                // poll() checks if there are any Future objects in the queue. if the  queue is empty, it returns null. Otherwise, it returns its first element and removes it from the queue.
+                Future<String> result = service.poll(20, TimeUnit.SECONDS);
+                if (result != null) {
+                    String report = result.get();
+                    System.out.printf("ReportReceiver: Report Received: %s\n", report);
+                }
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void setEnd(boolean end) {
+        this.end = end;
+    }
+}
+```
+
+### Main
+
+```java
+import java.util.concurrent.*;
+
+public class Main {
+    public static void main(String[] args) {
+        // create ThreadExecutor using the newCachedThreadPool() method of the Executors class
+        ExecutorService executor = (ExecutorService)Executors.newCachedThreadPool();
+
+        // create CompletionService using the executor created earlier as a parameter of the constructor
+        CompletionService<String> service = new ExecutorCompletionService<String>(executor);
+
+        // create two reportrequest objects and the threads to execute them
+        ReportRequest faceRequest = new ReportRequest("Face", service);
+        ReportRequest onlineRequest = new ReportRequest("Online", service);
+        Thread faceThread = new Thread(faceRequest);
+        Thread onlineThread = new Thread(onlineRequest);
+
+        ReportProcessor processor = new ReportProcessor(service);
+        Thread senderThread = new Thread(processor);
+
+        // start the three threads
+        System.out.printf("Main: Starting the Threads");
+        faceThread.start();
+        onlineThread.start();
+        senderThread.start();
+
+        // wait for the finalization of the reportrequest threads;
+        try {
+            System.out.printf("Main: Waiting for the report generators");
+            faceThread.join();
+            onlineThread.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        System.out.printf("Main: Shutting down the executor.\n");
+        executor.shutdown();
+        try {
+            executor.awaitTermination(1, TimeUnit.DAYS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        // finish the execution of the reportsender object setting the value of its end attribute to true
+        processor.setEnd(true);
+        System.out.printf("Main: Ends");
+    }
+}
+```
+
